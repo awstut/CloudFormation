@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters: 
+
+  StackVPC:
+    Description: The VPC of the application
+    ConstraintDescription: vpc id
+    Type: AWS::EC2::VPC::Id 
+
+  Ec2Key:
+    Description: Name of an existing EC2 key pair for SSH access to the EC2 instance.
+    Type: AWS::EC2::KeyPair::KeyName    
+
+  PublicSubnets:
+    Description: List of public subnets
+    ConstraintDescription: comma separated list of valid Subnet IDs
+    Type: List<AWS::EC2::Subnet::Id>
+
+  PrivateSubnets:
+    Description: List of private subnets
+    ConstraintDescription: comma separated list of valid Subnet IDs
+    Type: List<AWS::EC2::Subnet::Id>
+
+  PublicServerSecurityGroups: 
+    Description: Security groups for the PHP WebServer
+    Type: List<AWS::EC2::SecurityGroup::Id>  
+
+Resources: 
+
+  PublicServerRole: 
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "ec2.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Path: "/"        
+      RoleName: !Sub "${AWS::StackName}-PublicServerRole"
+
+  PHPServerInstanceProfile: 
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      Path: /
+      Roles: 
+        - !Ref PublicServerRole
+
+  PHPServerLaunchConfiguration: 
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties: 
+      ImageId: ami-0ec6517f6edbf8044
+      InstanceType: t2.micro
+      KeyName: !Ref Ec2Key
+      IamInstanceProfile: !Ref PHPServerInstanceProfile
+      SecurityGroups: !Ref PublicServerSecurityGroups
+      UserData:
+        Fn::Base64: |
+            #!/bin/bash
+            sudo yum update -y
+            yum install wget -y
+            sudo yum install ruby -y
+            cd /home/ec2-user
+            sudo curl -O https://aws-codedeploy-us-west-1.s3.amazonaws.com/latest/install
+            sudo chmod +x ./install
+            sudo ./install auto
+
+            sudo yum install httpd24 -y
+            sudo yum install php72 -y 
+            sudo yum install php72-mysqlnd -y
+            sudo yum install php72-imap -y
+            sudo yum install php72-pecl-memcache -y
+            sudo yum install php72-pecl-apcu -y 
+            sudo yum install php72-gd -y
+            sudo yum install php72-mbstring -y
+            sudo yum install mod24_ssl -y
+            sudo service httpd start
+      AssociatePublicIpAddress: True 
+      LaunchConfigurationName: !Sub "${AWS::StackName}-AppServer"
+
+
+  PHPServerASGroup: 
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties: 
+      AutoScalingGroupName : !Sub "${AWS::StackName}-AutoScalingGroup"
+      LaunchConfigurationName: !Ref PHPServerLaunchConfiguration
+      VPCZoneIdentifier : !Ref PublicSubnets
+      TargetGroupARNs: 
+        - !Ref PHPServerTargetGroup
+      MinSize: 2
+      MaxSize: 4
+      DesiredCapacity: 2
+      Tags:
+        - Key: Application
+          Value: !Sub "${AWS::StackName}"
+          PropagateAtLaunch: "true"
+
+  PHPServerTargetGroup: 
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties: 
+      Name: !Sub "${AWS::StackName}-AutoScaleTargetGroup"
+      VpcId: !Ref StackVPC
+      TargetType: instance
+      Port: 80
+      Protocol: HTTP
+      HealthCheckIntervalSeconds: 15
+      HealthCheckPath: /
+      HealthCheckPort: 80 
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 5
+      Matcher: 
+        HttpCode: 200-499
+
+  PHPAppLoadBalancerSecurityGroup: 
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties: 
+      GroupName: !Sub "${AWS::StackName}-LoadBalancerSG"
+      GroupDescription: "Load Balancer allow HTTP"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      VpcId: !Ref StackVPC
+      Tags: 
+      - Key: "Name"
+        Value: !Sub "${AWS::StackName}-LoadBalancerSG" 
+
+
+
+  PHPApplicationLoadBalancer: 
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties: 
+      Name: !Sub "${AWS::StackName}-AppLoadBalancer"
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets: !Ref PublicSubnets 
+      SecurityGroups: 
+        - !Ref PHPAppLoadBalancerSecurityGroup
+
+
+  PHPAppLoadBalancerListener: 
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties: 
+      DefaultActions: 
+        - Type: forward
+          TargetGroupArn: !Ref PHPServerTargetGroup
+      LoadBalancerArn: !Ref PHPApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+
+
+Outputs:
+
+  LoadBalancerName:
+    Description: The name of the application LoadBalancer
+    Value: !GetAtt PHPApplicationLoadBalancer.LoadBalancerName
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerName"
+
+  LoadBalancerDNS:
+    Description: The DNS name of the application LoadBalancer
+    Value: !GetAtt PHPApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerDNS"
+
+  LoadBalancerSecurityGroups:
+    Description: The IDs of the security groups for the load balancer
+    Value: !Sub "${!GetAtt PHPApplicationLoadBalancer.SecurityGroups}"
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerSG"
