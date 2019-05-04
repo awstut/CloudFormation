@@ -15,8 +15,6 @@ APP_NAME=$1
 EC2_KEY_NAME=$2
 
 echo ""
-echo "SRC: ${SOURCE}"
-echo "DIR: ${DIR}"
 
 #Check Parameters
 if [ -z "$1" ]
@@ -47,12 +45,32 @@ VPC_STACK_ID=$( \
   aws cloudformation create-stack \
   --stack-name "${APP_NAME}-VPC" \
   --template-body file://${DIR}/1_VPC_Template.yml \
-  --capabilities CAPABILITY_IAM \
   | jq -r .StackId \
 )
 
 echo "Waiting on ${VPC_STACK_ID} create completion..."
 aws cloudformation wait stack-create-complete --stack-name ${VPC_STACK_ID}
-VPC_STACK_NAME=$(aws cloudformation describe-stacks --stack-name MyApp-VPC | jq .Stacks[0].StackName)
+VPC_STACK_NAME=$(aws cloudformation describe-stacks --stack-name ${VPC_STACK_ID} | jq .Stacks[0].StackName)
 echo "Created ${VPC_STACK_NAME}"
+
+
+#Create AutoScaling group with an Application Loadbalancer to distrubute the traffic
+echo "Creating AutoScaling Layer..."
+ASG_STACK_ID=$( \
+  aws cloudformation create-stack \
+  --stack-name "${APP_NAME}-ASG" \
+  --template-body file://${DIR}/2_AutoScaling_Template.yml \
+  --parameters ParameterKey=VPCStack,ParameterValue=$VPC_STACK_NAME ParameterKey=Ec2Key,ParameterValue=$EC2_KEY_NAME \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+  | jq -r .StackId \
+)
+
+echo "Waiting on ${ASG_STACK_ID} create completion..."
+aws cloudformation wait stack-create-complete --stack-name ${ASG_STACK_ID}
+ASG_STACK_NAME=$(aws cloudformation describe-stacks --stack-name ${ASG_STACK_ID} | jq .Stacks[0].StackName)
+ASG_DNS_NAME=$(aws cloudformation describe-stacks --stack-name ${ASG_STACK_ID} | jq .Stacks[0].Outputs| jq '.[] | select(.OutputKey=="LoadBalancerDNS")' | jq -r .OutputValue)
+echo "Created ${ASG_STACK_NAME}"
+
+dns_url=$(echo "$ASG_DNS_NAME" | tr '[:upper:]' '[:lower:]')
+echo "LoadBalancerDNS: http://${dns_url}"
 
