@@ -2,30 +2,43 @@ AWSTemplateFormatVersion: 2010-09-09
 
 Parameters: 
 
-  StackVPC:
-    Description: The VPC of the application
-    ConstraintDescription: vpc id
-    Type: AWS::EC2::VPC::Id 
+  VPCStack: 
+    Type: "String"
+    Description: What did you call the stack for the VPC? 
 
   Ec2Key:
     Description: Name of an existing EC2 key pair for SSH access to the EC2 instance.
     Type: AWS::EC2::KeyPair::KeyName    
 
-  PublicSubnets:
-    Description: List of public subnets
-    ConstraintDescription: comma separated list of valid Subnet IDs
-    Type: List<AWS::EC2::Subnet::Id>
-
-  PrivateSubnets:
-    Description: List of private subnets
-    ConstraintDescription: comma separated list of valid Subnet IDs
-    Type: List<AWS::EC2::Subnet::Id>
-
-  PublicServerSecurityGroups: 
-    Description: Security groups for the PHP WebServer
-    Type: List<AWS::EC2::SecurityGroup::Id>  
-
 Resources: 
+
+  PublicServerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties: 
+      GroupName: "PublicServerSecurityGroup"
+      GroupDescription: "Public Servers Allow Public SSH, HTTP and HTTPS"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0  
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub:
+            - ${VPCStackName}-VPCID
+            - VPCStackName:
+                !Ref VPCStack 
+      Tags: 
+      - Key: "Name"
+        Value: !Sub "${AWS::StackName}-PublicSecurityGroup"
 
   PublicServerRole: 
     Type: AWS::IAM::Role
@@ -57,7 +70,8 @@ Resources:
       InstanceType: t2.micro
       KeyName: !Ref Ec2Key
       IamInstanceProfile: !Ref PHPServerInstanceProfile
-      SecurityGroups: !Ref PublicServerSecurityGroups
+      SecurityGroups: 
+        - !Ref PublicServerSecurityGroup
       UserData:
         Fn::Base64: |
             #!/bin/bash
@@ -88,7 +102,14 @@ Resources:
     Properties: 
       AutoScalingGroupName : !Sub "${AWS::StackName}-AutoScalingGroup"
       LaunchConfigurationName: !Ref PHPServerLaunchConfiguration
-      VPCZoneIdentifier : !Ref PublicSubnets
+      VPCZoneIdentifier : 
+        Fn::Split: 
+          - ","
+          - Fn::ImportValue:
+              Fn::Sub:
+                - ${VPCStackName}-PublicSubnets
+                - VPCStackName:
+                    !Ref VPCStack
       TargetGroupARNs: 
         - !Ref PHPServerTargetGroup
       MinSize: 2
@@ -103,7 +124,12 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties: 
       Name: !Sub "${AWS::StackName}-AutoScaleTargetGroup"
-      VpcId: !Ref StackVPC
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub:
+            - ${VPCStackName}-VPCID
+            - VPCStackName:
+                !Ref VPCStack 
       TargetType: instance
       Port: 80
       Protocol: HTTP
@@ -126,7 +152,12 @@ Resources:
         FromPort: 80
         ToPort: 80
         CidrIp: 0.0.0.0/0
-      VpcId: !Ref StackVPC
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub:
+            - ${VPCStackName}-VPCID
+            - VPCStackName:
+                !Ref VPCStack 
       Tags: 
       - Key: "Name"
         Value: !Sub "${AWS::StackName}-LoadBalancerSG" 
@@ -140,7 +171,14 @@ Resources:
       Type: application
       Scheme: internet-facing
       IpAddressType: ipv4
-      Subnets: !Ref PublicSubnets 
+      Subnets:
+        Fn::Split: 
+          - ","
+          - Fn::ImportValue:
+              Fn::Sub:
+                - ${VPCStackName}-PublicSubnets
+                - VPCStackName:
+                    !Ref VPCStack  
       SecurityGroups: 
         - !Ref PHPAppLoadBalancerSecurityGroup
 
