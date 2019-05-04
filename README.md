@@ -24,4 +24,5 @@ To run the AWS_Setup script, you will need to install and configure:
 To setup the application's inrastructure, run: 
 
 `sh AWS_Setup.sh <APP_NAME> <EC2_KEYPAIR>`
+
 Where APP_NAME is the name you wish to call the application and EC2_KEYPAIR is the ssh key for the EC2 instances.
